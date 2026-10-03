@@ -1,6 +1,6 @@
 {
   "name": "@animalabs/discord-mcpl",
-  "version": "0.1.4",
+  "version": "0.1.4-familiar",
   "type": "module",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
@@ -15,7 +15,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@animalabs/mcpl-core": "^0.2.1",
+    "@animalabs/mcpl-core": "^0.3.0",
     "discord.js": "^14.16.0",
     "sharp": "^0.33.5"
   },
@@ -29,10 +29,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/anima-research/discord-mcpl.git"
+    "url": "git+https://github.com/ghostbloo/discord-mcpl.git"
   },
-  "homepage": "https://github.com/anima-research/discord-mcpl#readme",
+  "homepage": "https://github.com/ghostbloo/discord-mcpl#readme",
   "bugs": {
-    "url": "https://github.com/anima-research/discord-mcpl/issues"
+    "url": "https://github.com/ghostbloo/discord-mcpl/issues"
   }
 }

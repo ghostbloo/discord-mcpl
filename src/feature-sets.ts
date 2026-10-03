@@ -4,13 +4,11 @@
 
 import type { FeatureSetDeclaration } from '@animalabs/mcpl-core';
 
-export const featureSets: FeatureSetDeclaration[] = [
-  {
-    name: 'discord.messaging',
+export const featureSets: Record<string, FeatureSetDeclaration> = {
+  'discord.messaging': {
     description: 'Send, read, react to messages in Discord channels',
     uses: ['tools', 'channels.publish'],
     rollback: true,
-    hostState: false,
     // MCPL RFC-001 — tags carried on Discord message events (emits umbrellas
     // directly, so no host-side implication expansion is needed).
     tagOntology: {
@@ -29,31 +27,25 @@ export const featureSets: FeatureSetDeclaration[] = [
       open: true,
     },
   },
-  {
-    name: 'discord.channels',
+  'discord.channels': {
     description: 'Create, delete, and manage Discord channels',
     uses: ['tools'],
     rollback: false,
-    hostState: false,
   },
-  {
-    name: 'discord.history',
+  'discord.history': {
     description: 'Fetch message history from Discord channels',
     uses: ['tools'],
     rollback: false,
-    hostState: false,
   },
-  {
-    name: 'discord.subscriptions',
+  'discord.subscriptions': {
     description:
       'Manage per-channel ambient-message subscriptions (which channels deliver ' +
       'non-mention messages for passive awareness). Mentions and DMs are always ' +
       'delivered and are not affected by subscriptions.',
     uses: ['tools'],
     rollback: false,
-    hostState: false,
   },
-];
+};
 
 /** Check if a feature set is in a given enabled list. */
 export function isEnabled(name: string, enabledSets: Set<string>): boolean {

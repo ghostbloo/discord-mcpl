@@ -668,7 +668,7 @@ export class DiscordMcplServer {
       }
     } catch (err) {
       if ((err as Error).name === 'ConnectionClosedError') {
-        console.log('[discord-mcpl] Client disconnected');
+        console.error('[discord-mcpl] Client disconnected');
       } else {
         console.error('[discord-mcpl] Connection error:', err);
       }
@@ -737,13 +737,13 @@ export class DiscordMcplServer {
     // Wait for initialized notification
     const initedMsg = await conn.nextMessage();
     if (initedMsg.type === 'notification' && initedMsg.notification.method === 'notifications/initialized') {
-      console.log('[discord-mcpl] Client initialized' + (this.mcplEnabled ? ' (MCPL mode)' : ' (MCP mode)'));
+      console.error('[discord-mcpl] Client initialized' + (this.mcplEnabled ? ' (MCPL mode)' : ' (MCP mode)'));
     }
 
     // In MCPL mode, default all feature sets to enabled
     if (this.mcplEnabled) {
-      for (const fs of featureSets) {
-        this.enabledFeatureSets.add(fs.name);
+      for (const name of Object.keys(featureSets)) {
+        this.enabledFeatureSets.add(name);
       }
     }
   }
@@ -807,7 +807,9 @@ export class DiscordMcplServer {
           break;
         }
 
-        case method.CONTEXT_AFTER_INFERENCE: {
+        // mcpl-core dropped the constant (replaced by inference/lifecycle); match the raw
+        // method so older hosts still get the no-op stub below.
+        case 'context/afterInference': {
           // Sticky-reply hook: post text-only responses to the last-active
           // channel as if the agent had called send_message herself. Side
           // effect; no `modifiedResponse` returned (we don't rewrite her text).
@@ -2173,7 +2175,7 @@ export class DiscordMcplServer {
             const norm = await normalizeImageForInference(raw, att.contentType);
             if (norm) {
               blocks.push({ type: 'image', data: norm.data, mimeType: norm.mimeType } as ContentBlock);
-              blocks.push(textContent(`[image attachment: ${att.name}]`));
+              blocks.push(textContent(`[image attachment: ${att.name} — ${att.url}]`));
             } else {
               blocks.push(textContent(`[image attachment "${att.name}" (${fmt(att.size)}) could not be inlined — ${att.url}]`));
             }
@@ -2407,22 +2409,19 @@ export class DiscordMcplServer {
     // mentions to @username / @role / #channel — always use that in the
     // rendered body so Lena never sees raw <@123456789> blobs.
     //
-    // For the location header (which channel/guild we're in), only prepend
-    // it when the message's channel differs from the last communication
-    // channel (compare BEFORE updating the tracker). Outbound sends also
-    // advance lastChannelId via markOutboundSend, so an inbound after Lena
-    // sent elsewhere correctly gets a fresh header back to her original
-    // conversation.
-    const contextChanged = this.lastChannelId !== msg.channelId;
-    let location = '';
-    if (contextChanged) {
-      const locationParts: string[] = [];
-      if (msg.channelName) locationParts.push(`#${msg.channelName}`);
-      if (msg.threadName) locationParts.push(`thread "${msg.threadName}"`);
-      if (msg.guildName) locationParts.push(`in ${msg.guildName}`);
-      else if (msg.guildId === null) locationParts.push('DM');
-      if (locationParts.length > 0) location = `[${locationParts.join(' ')}] `;
-    }
+    // Location header on every message (household change, ghostbloo/familiar
+    // #147): hosts that surface only the rendered body (mcpl-cc-bridge) can't
+    // see origin metadata, so the channel id must be in the text to react,
+    // reply, or fetch around. Previously only prepended on channel change,
+    // which left most events unroutable. Also names the reply target (#156).
+    const locationParts: string[] = [];
+    if (msg.channelName) locationParts.push(`#${msg.channelName}`);
+    if (msg.threadName) locationParts.push(`thread "${msg.threadName}"`);
+    if (msg.guildName) locationParts.push(`in ${msg.guildName}`);
+    else if (msg.guildId === null) locationParts.push('DM');
+    locationParts.push(`· channel ${msg.channelId}`);
+    if (msg.replyToId) locationParts.push(`· replying to ${msg.replyToId}`);
+    const location = `[${locationParts.join(' ')}] `;
     const renderedContent = `${prefixBlock}${location}${msg.authorName}: ${msg.cleanContent}`;
     // Advance the watermark so future backscroll on this channel doesn't
     // re-include this message. Set regardless of which forwarding path we

@@ -246,10 +246,11 @@ describe('DiscordMcplServer', () => {
     assert.equal(mcpl.channels, true);
     assert.equal(mcpl.rollback, true);
     assert.ok(mcpl.featureSets);
-    assert.equal(mcpl.featureSets!.length, 4);
-    assert.equal(mcpl.featureSets![0].name, 'discord.messaging');
+    assert.ok(typeof mcpl.featureSets === 'object');
+    assert.equal(Object.keys(mcpl.featureSets).length, 4);
+    assert.equal(Object.keys(mcpl.featureSets)[0], 'discord.messaging');
     assert.ok(
-      mcpl.featureSets!.some((fs) => fs.name === 'discord.subscriptions'),
+      'discord.subscriptions' in mcpl.featureSets,
       'discord.subscriptions feature set should be declared',
     );
 
