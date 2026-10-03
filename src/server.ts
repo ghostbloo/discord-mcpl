@@ -11,10 +11,6 @@ import {
   McplConnection,
   textContent,
   method,
-  ERR_FEATURE_SET_NOT_ENABLED,
-  ERR_UNKNOWN_FEATURE_SET,
-  ERR_UNKNOWN_CHANNEL,
-  ERR_CHECKPOINT_NOT_FOUND,
 } from '@animalabs/mcpl-core';
 import { formatAgentDateTime, resolveAgentTimeZone } from './timezone.js';
 
@@ -27,7 +23,6 @@ import type {
   InitializeCapabilities,
   FeatureSetsUpdateParams,
   PushEventParams,
-  PushEventResult,
   ChannelsRegisterParams,
   ChannelsOpenParams,
   ChannelsOpenResult,
@@ -36,7 +31,6 @@ import type {
   ChannelsPublishParams,
   ChannelsPublishResult,
   ChannelsIncomingParams,
-  ChannelsIncomingResult,
   ChannelsListResult,
   StateRollbackParams,
   StateRollbackResult,
@@ -818,6 +812,15 @@ export class DiscordMcplServer {
           break;
         }
 
+        // MCPL 0.5 (§5.3, §6.7): the initial policy and any grant change arrive
+        // as a Request that waits for a receipt. Unanswered, the host keeps an
+        // empty grant and the connection MCP-only, so no inbound events.
+        case method.FEATURE_SETS_UPDATE: {
+          this.applyFeatureSetsUpdate(params as unknown as FeatureSetsUpdateParams);
+          conn.sendResponse(req.id, { accepted: true });
+          break;
+        }
+
         default:
           conn.sendError(req.id, -32601, `Method not found: ${req.method}`);
       }
@@ -862,18 +865,17 @@ export class DiscordMcplServer {
     }
   }
 
+  private applyFeatureSetsUpdate(p: FeatureSetsUpdateParams | undefined): void {
+    for (const name of p?.enabled ?? []) this.enabledFeatureSets.add(name);
+    for (const name of p?.disabled ?? []) this.enabledFeatureSets.delete(name);
+  }
+
   // ── Notification Dispatch ──
 
   private handleNotification(notif: JsonRpcNotification): void {
     switch (notif.method) {
       case method.FEATURE_SETS_UPDATE: {
-        const p = notif.params as FeatureSetsUpdateParams;
-        if (p.enabled) {
-          for (const name of p.enabled) this.enabledFeatureSets.add(name);
-        }
-        if (p.disabled) {
-          for (const name of p.disabled) this.enabledFeatureSets.delete(name);
-        }
+        this.applyFeatureSetsUpdate(notif.params as FeatureSetsUpdateParams);
         break;
       }
 
