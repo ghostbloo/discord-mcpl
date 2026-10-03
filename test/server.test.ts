@@ -3,7 +3,7 @@
  * Uses a mock Discord adapter (no real Discord connection).
  */
 
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as net from 'node:net';
 import { writeFileSync, unlinkSync, existsSync } from 'node:fs';
@@ -12,7 +12,6 @@ import { tmpdir } from 'node:os';
 
 import {
   McplConnection,
-  textContent,
   method,
 } from '@animalabs/mcpl-core';
 
@@ -23,10 +22,7 @@ import type {
   ChannelsRegisterParams,
   ChannelsIncomingParams,
   PushEventParams,
-  ChannelsOpenParams,
   ChannelsOpenResult,
-  ChannelsListResult,
-  ChannelsPublishParams,
   ChannelsPublishResult,
 } from '@animalabs/mcpl-core';
 
@@ -281,6 +277,27 @@ describe('DiscordMcplServer', () => {
     assert.equal(initResult.capabilities.experimental, undefined);
     // But tools should be declared
     assert.ok(initResult.capabilities.tools);
+
+    client.close();
+    await serverPromise;
+  });
+
+  it('answers featureSets/update sent as a Request (MCPL 0.5 initial policy)', async () => {
+    // A 0.5 host waits ~15s for this receipt; unanswered, it leaves the grant
+    // empty and the connection MCP-only, so no inbound Discord events arrive.
+    const { client, serverConn, discord } = await createTestPair();
+    const server = new DiscordMcplServer(discord as unknown as DiscordAdapter);
+    const serverPromise = server.serve(serverConn);
+
+    await mcplHandshake(client);
+    const regMsg = await client.nextMessage();
+    if (regMsg.type === 'request') client.sendResponse(regMsg.request.id, {});
+
+    const receipt = (await Promise.race([
+      client.sendRequest('featureSets/update', { enabled: ['discord.messaging'] }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('featureSets/update request went unanswered')), 2000)),
+    ])) as { accepted?: boolean };
+    assert.equal(receipt.accepted, true);
 
     client.close();
     await serverPromise;
