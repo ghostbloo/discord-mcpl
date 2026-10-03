@@ -636,19 +636,29 @@ export class DiscordMcplServer {
     // Handshake
     await this.handleInitialize();
 
-    // If MCPL is enabled, register all visible Discord channels
-    if (this.mcplEnabled) {
-      await this.registerDiscordChannels();
-    }
-
-    // Deliver anything that arrived while the bot was offline (mentions + DMs
-    // everywhere, full missed backscroll for subscribed channels). Best-effort
-    // and one-shot; failures must not block serving.
-    try {
-      await this.runReconnectSweep();
-    } catch (err) {
-      console.error('[discord-mcpl] Reconnect catch-up sweep failed:', (err as Error).message);
-    }
+    // Channel registration (awaits the host's reply) and the reconnect sweep
+    // (Discord history fetches) run beside the main loop, not before it. An
+    // MCPL 0.5 host sends featureSets/update as a Request right after
+    // initialize and gives up after 15s; if the loop isn't reading yet, that
+    // Request sits unread and the host keeps the connection MCP-only.
+    const startup = (async () => {
+      // If MCPL is enabled, register all visible Discord channels
+      if (this.mcplEnabled) {
+        await this.registerDiscordChannels();
+      }
+      // Deliver anything that arrived while the bot was offline (mentions + DMs
+      // everywhere, full missed backscroll for subscribed channels). Best-effort
+      // and one-shot; failures must not block serving.
+      try {
+        await this.runReconnectSweep();
+      } catch (err) {
+        console.error('[discord-mcpl] Reconnect catch-up sweep failed:', (err as Error).message);
+      }
+    })().catch((err) => {
+      if ((err as Error).name !== 'ConnectionClosedError') {
+        console.error('[discord-mcpl] Startup registration failed:', err);
+      }
+    });
 
     // Main loop
     try {
@@ -668,6 +678,7 @@ export class DiscordMcplServer {
       }
     }
 
+    await startup;
     this.conn = null;
   }
 

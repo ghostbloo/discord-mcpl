@@ -303,6 +303,29 @@ describe('DiscordMcplServer', () => {
     await serverPromise;
   });
 
+  it('answers featureSets/update before the host has replied to channels/register', async () => {
+    // A 0.5 host sends the policy Request right after initialize. The server's
+    // own channels/register (and the reconnect sweep) must not keep the main
+    // loop from reading it, or the host times out and stays MCP-only.
+    const { client, serverConn, discord } = await createTestPair();
+    const server = new DiscordMcplServer(discord as unknown as DiscordAdapter);
+    const serverPromise = server.serve(serverConn);
+
+    await mcplHandshake(client);
+    const regMsg = await client.nextMessage(); // channels/register — deliberately not answered yet
+    assert.equal(regMsg.type, 'request');
+
+    const receipt = (await Promise.race([
+      client.sendRequest('featureSets/update', { enabled: ['discord.messaging'] }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('featureSets/update blocked behind channels/register')), 2000)),
+    ])) as { accepted?: boolean };
+    assert.equal(receipt.accepted, true);
+
+    if (regMsg.type === 'request') client.sendResponse(regMsg.request.id, {});
+    client.close();
+    await serverPromise;
+  });
+
   it('tools/list returns tool definitions', async () => {
     const { client, serverConn, discord } = await createTestPair();
     const server = new DiscordMcplServer(discord as unknown as DiscordAdapter);
