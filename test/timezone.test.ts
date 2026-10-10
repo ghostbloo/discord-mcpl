@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatAgentDateTime, isValidTimeZone, resolveAgentTimeZone, resolveTimestampStyle } from '../src/timezone.js';
+import { formatAgentDateTime, isValidTimeZone, resolveAgentTimeZone, resolveTimestampStyle } from '../src/utils/timezone.js';
 
 test('formats Discord backscroll times in the configured zone', () => {
   assert.equal(

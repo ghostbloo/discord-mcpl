@@ -44,11 +44,7 @@
  * without a gateway connection; the adapter supplies live candidates.
  */
 
-/** Discord snowflakes are 17-20 digits. Anything all-digits in that range is
- *  treated as an id and passed through untouched (backwards compatible). */
-export function isSnowflake(value: string): boolean {
-  return /^\d{17,20}$/.test(value);
-}
+import { isSnowflake } from "./utils/discord-strings.js";
 
 /** A channel the bot can currently see, already filtered by the allowlist. */
 export interface ChannelCandidate {

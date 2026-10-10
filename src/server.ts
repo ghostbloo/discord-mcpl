@@ -11,12 +11,8 @@ import {
   McplConnection,
   textContent,
   method,
-  ERR_FEATURE_SET_NOT_ENABLED,
-  ERR_UNKNOWN_FEATURE_SET,
-  ERR_UNKNOWN_CHANNEL,
-  ERR_CHECKPOINT_NOT_FOUND,
 } from '@animalabs/mcpl-core';
-import { formatAgentDateTime, resolveAgentTimeZone, resolveTimestampStyle } from './timezone.js';
+import { formatAgentDateTime, resolveAgentTimeZone, resolveTimestampStyle } from './utils/timezone.js';
 
 import type {
   JsonRpcRequest,
@@ -27,7 +23,6 @@ import type {
   InitializeCapabilities,
   FeatureSetsUpdateParams,
   PushEventParams,
-  PushEventResult,
   ChannelsRegisterParams,
   ChannelsOpenParams,
   ChannelsOpenResult,
@@ -36,7 +31,6 @@ import type {
   ChannelsPublishParams,
   ChannelsPublishResult,
   ChannelsIncomingParams,
-  ChannelsIncomingResult,
   ChannelsListResult,
   StateRollbackParams,
   StateRollbackResult,
@@ -54,16 +48,17 @@ import { featureSets, isEnabled, featureSetForTool } from './feature-sets.js';
 import { ChannelManager, mcplChannelId, parseMcplChannelId, toDescriptor, toDmDescriptor } from './channels.js';
 import {
   channelLabel,
-  isSnowflake,
   looksLikeExplicitName,
   type AddressingPath,
 } from './channel-names.js';
+import { isSnowflake } from "./utils/discord-strings.js";
 import { saveFiltersFile, loadFiltersFile, DiscordFiltersState, type DiscordFilters } from './filters.js';
 import { StateTracker } from './state.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import sharp from 'sharp';
 import { dbg } from './debug-log.js';
+import { parseMessageRef } from './utils/discord-strings.js';
+import { DEFAULT_ATTACHMENT_INLINE_MAX_BYTES, IMAGE_FETCH_CEILING, MAX_TEXT_BYTES, normalizeImageForInference } from './utils/attachments.js';
 
 type ChannelOpenRequest = ChannelsOpenParams & {
   channelId?: string;
@@ -98,107 +93,6 @@ function requireContentOrFiles(content: string, files: OutgoingFile[] | undefine
 const CHX_NOOP_PREFIX = 'm continue';
 const AGENT_TIME_ZONE = resolveAgentTimeZone();
 const AGENT_TIMESTAMP_STYLE = resolveTimestampStyle();
-
-// ============================================================================
-// Image normalization (downsample-on-ingest)
-// ============================================================================
-
-/** Longest edge (px) we keep for inlined images. Matches the ~1568px ceiling
- *  every major vision model downscales to server-side, so resizing to this is
- *  perceptually lossless — the model discards anything finer regardless. */
-const IMAGE_LONG_EDGE_MAX = 1568;
-/** JPEG quality when re-encoding opaque images. */
-const IMAGE_JPEG_QUALITY = 85;
-/** Cap on the *encoded* bytes we inline (raw, pre-base64). Anthropic accepts
- *  ~5MB/image of base64; staying under ~3.5MB raw keeps us comfortably inside. */
-const IMAGE_OUTPUT_RAW_CAP = 3.5 * 1024 * 1024;
-/** Refuse to even download sources larger than this (OOM guard). sharp's own
- *  pixel limit guards the decoded bitmap against decompression bombs. */
-const IMAGE_FETCH_CEILING = 25 * 1024 * 1024;
-
-/** Absolute ceiling on inlined text-attachment bytes. The configurable
- *  inline cap (DISCORD_ATTACHMENT_INLINE_MAX_BYTES) clamps to this — however
- *  high the knob is set, a text attachment can never put more than 256KiB
- *  into context. */
-const MAX_TEXT_BYTES = 256 * 1024;
-/** Default inline cap for text attachments (issue #30): 5KiB. */
-const DEFAULT_ATTACHMENT_INLINE_MAX_BYTES = 5120;
-
-interface NormalizedImage {
-  data: string; // base64
-  mimeType: string;
-}
-
-/** Downsample an image to model-max on ingest: resize so the longest edge is
- *  <= IMAGE_LONG_EDGE_MAX (never upscales), re-encoding to stay under the inline
- *  byte cap. Opaque images become JPEG; images with alpha stay PNG (flattened to
- *  JPEG only as a last resort to fit the cap). Already-small images pass through
- *  untouched. Animated GIFs are left as-is (frame resizing is out of scope) and
- *  inlined only when already under cap. Returns null when nothing inlinable can
- *  be produced, letting the caller degrade to a text note. */
-async function normalizeImageForInference(
-  buf: Buffer,
-  declaredCt: string | null,
-): Promise<NormalizedImage | null> {
-  try {
-    const meta = await sharp(buf, { animated: true }).metadata();
-    const longest = Math.max(meta.width ?? 0, meta.height ?? 0);
-    const isAnimated = (meta.pages ?? 1) > 1;
-    // The pass-through fast paths below may ONLY emit formats the model API
-    // accepts. sharp happily reads svg/tiff/avif/heif too — an SVG small
-    // enough to skip re-encoding used to sail through as `image/svg` and
-    // poison the agent's history with a permanently-400ing block (LabClaude,
-    // 2026-07-11). Non-API formats now fall through to the re-encode
-    // pipeline, which rasterizes them to PNG/JPEG.
-    const API_SAFE_FORMATS = new Set(['jpeg', 'png', 'gif', 'webp']);
-    const apiSafe = API_SAFE_FORMATS.has(meta.format ?? '');
-
-    // Animated: don't resize frames here. Inline as-is if small enough.
-    // (Animated non-gif/webp can't be inlined at all — degrade to the
-    // caller's text note rather than emit an unacceptable media type.)
-    if (isAnimated) {
-      return apiSafe && buf.length <= IMAGE_OUTPUT_RAW_CAP
-        ? { data: buf.toString('base64'), mimeType: `image/${meta.format}` }
-        : null;
-    }
-
-    // Already within bounds and under cap → inline original bytes unchanged.
-    if (apiSafe && longest > 0 && longest <= IMAGE_LONG_EDGE_MAX && buf.length <= IMAGE_OUTPUT_RAW_CAP) {
-      return { data: buf.toString('base64'), mimeType: `image/${meta.format}` };
-    }
-
-    // Fresh pipeline per encode (sharp instances aren't safely reusable across
-    // multiple toBuffer() calls). resize() with withoutEnlargement is a no-op
-    // when the image is already within bounds but over the byte cap.
-    const resizeOpts = { width: IMAGE_LONG_EDGE_MAX, height: IMAGE_LONG_EDGE_MAX, fit: 'inside' as const, withoutEnlargement: true };
-    const base = () => sharp(buf).resize(resizeOpts);
-
-    let out: Buffer;
-    let mimeType: string;
-    if (meta.hasAlpha) {
-      out = await base().png({ compressionLevel: 9 }).toBuffer();
-      mimeType = 'image/png';
-    } else {
-      out = await base().jpeg({ quality: IMAGE_JPEG_QUALITY }).toBuffer();
-      mimeType = 'image/jpeg';
-    }
-
-    // Still over cap (large PNG / high-detail photo) → flatten + shrink harder.
-    if (out.length > IMAGE_OUTPUT_RAW_CAP) {
-      out = await sharp(buf)
-        .resize({ width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true })
-        .flatten({ background: '#ffffff' })
-        .jpeg({ quality: 70 })
-        .toBuffer();
-      mimeType = 'image/jpeg';
-      if (out.length > IMAGE_OUTPUT_RAW_CAP) return null;
-    }
-
-    return { data: out.toString('base64'), mimeType };
-  } catch {
-    return null;
-  }
-}
 
 export class DiscordMcplServer {
   private conn: McplConnection | null = null;
@@ -415,6 +309,10 @@ export class DiscordMcplServer {
     this.voice?.onReport((r) => this.handleVoiceReport(r));
   }
 
+  get isHostConnected() {
+    return !!this.conn;
+  }
+
   private handleVoiceReport(r: import('./voice.js').UtteranceReport): void {
     if (!this.conn || !this.mcplEnabled) return;
     if (r.status === 'spoken' && r.unvoicedText.length === 0) return;
@@ -549,11 +447,7 @@ export class DiscordMcplServer {
       return;
     }
 
-    const admins = (process.env.DISCORD_ADMIN_USERS ?? '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (!admins.includes(interaction.user.id)) {
+    if (!this.discord.adminUsers.has(interaction.user.id)) {
       dbg('slash:unauthorized', { command: interaction.commandName, userId: interaction.user.id });
       await interaction.reply({ content: `Not authorized to use /${interaction.commandName}.`, flags: MessageFlags.Ephemeral });
       return;
@@ -630,27 +524,10 @@ export class DiscordMcplServer {
     }
   }
 
-  /**
-   * Parse a Discord message link or raw ID into a message id.
-   * Accepts:
-   *   https://discord.com/channels/<guild>/<channel>/<messageId>
-   *   <channel>-<messageId>  (the "Copy ID" with shift on some clients)
-   *   a bare 17–20 digit snowflake
-   */
-  private parseMessageRef(input: string): string | null {
-    const s = input.trim();
-    const link = s.match(/channels\/\d+\/\d+\/(\d+)/);
-    if (link) return link[1];
-    const dashed = s.match(/^\d+-(\d+)$/);
-    if (dashed) return dashed[1];
-    if (/^\d{17,20}$/.test(s)) return s;
-    return null;
-  }
-
   private async handleHideCommand(interaction: ChatInputCommandInteraction): Promise<void> {
     const fromRaw = interaction.options.getString('message', true);
     const toRaw = interaction.options.getString('to');
-    const fromMessageId = this.parseMessageRef(fromRaw);
+    const fromMessageId = parseMessageRef(fromRaw);
     if (!fromMessageId) {
       await interaction.reply({
         content: `Could not parse a message link/ID from \`${fromRaw}\`.`,
@@ -660,7 +537,7 @@ export class DiscordMcplServer {
     }
     let toMessageId: string | undefined;
     if (toRaw) {
-      const parsed = this.parseMessageRef(toRaw);
+      const parsed = parseMessageRef(toRaw);
       if (!parsed) {
         await interaction.reply({ content: `Could not parse \`${toRaw}\`.`, flags: MessageFlags.Ephemeral });
         return;

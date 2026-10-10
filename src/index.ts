@@ -6,40 +6,7 @@
  *   discord-mcpl --stdio           # MCP-compatible stdio transport
  *   discord-mcpl --tcp <port>      # TCP transport for MCPL hosts
  *
- * Environment:
- *   DISCORD_TOKEN     - Required: Discord bot token
- *   DISCORD_GUILD_ID  - Optional: Comma-separated guild ID filter. Each entry
- *                       is `guildId` (all channels) or `guildId:chanId+chanId`
- *                       (whitelist those channels + their threads only)
- *   DISCORD_DM_USERS  - Optional: Comma-separated user ID whitelist for DMs.
- *                       When set, DMs from anyone else are dropped.
- *   DISCORD_ADMIN_USERS - Optional: Comma-separated user IDs allowed to use
- *                       admin slash commands (/undo). Unset = nobody.
- *   DISCORD_FILTERS_FILE - Optional: path to a JSON file holding the guild/
- *                       channel + DM whitelists and the operator-maintained
- *                       suppressedReactionEmojis list (see filters.ts for
- *                       schema). When set, the file wins over
- *                       DISCORD_GUILD_ID / DISCORD_DM_USERS (and is seeded
- *                       from them if absent), and edits to it are
- *                       HOT-RELOADED within ~3s — no restart. Also enables
- *                       the filters_get/filters_update agent tools.
- *   DISCORD_SUPPRESS_REACTION_EMOJIS - Deprecated compat source for
- *                       reaction suppression (comma-separated). Seeds the
- *                       filters file's suppressedReactionEmojis key on
- *                       first materialization; ignored once a filters file
- *                       carries the key. Process-static: read once at
- *                       startup, changes require a restart (hot reload
- *                       belongs to the file plane). Retires per issue #16.
- *   DISCORD_SUPPRESSED_REACTIONS_BASELINE - Host-injected protective
- *                       baseline for reaction suppression (comma-
- *                       separated). Applies (and seeds the filters file on
- *                       first materialization) only when no operator
- *                       configuration exists: a file key — including an
- *                       explicit [] — or the legacy env above always wins,
- *                       never unioned. Intended to be set by host
- *                       composition from the Agent Framework's annotation
- *                       map; standalone deployments leave it unset.
- *                       Process-static, not deprecated.
+ * Environment: See `./config.ts`
  */
 
 import * as net from 'node:net';
@@ -83,6 +50,10 @@ async function main(): Promise<void> {
     guildIds: filters.guildIds,
     guildChannels: filters.guildChannels,
     dmUsers: filters.dmUsers,
+    adminUsers: (process.env.DISCORD_ADMIN_USERS ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
   });
 
   const discordReady = new Promise<void>((resolve) => {

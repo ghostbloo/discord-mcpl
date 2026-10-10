@@ -38,6 +38,7 @@ import {
   resolveChannelName,
   type ResolveResult,
 } from './channel-names.js';
+import { splitForDiscord } from './utils/discord-strings.js';
 
 /** Maximum attachments Discord accepts on a single message. */
 const MAX_DISCORD_ATTACHMENTS = 10;
@@ -94,6 +95,7 @@ export interface DiscordAdapterConfig {
   /** DM user whitelist. When set, incoming DMs are only handled from these
    *  user ids; DMs from anyone else are dropped. Unset = all DMs allowed. */
   dmUsers?: string[];
+  adminUsers?: string[];
 }
 
 /** A file attached to a Discord message (image, text file, etc.). */
@@ -447,6 +449,7 @@ export class DiscordAdapter {
   private guildIds?: string[];
   private guildChannels?: Map<string, Set<string>>;
   private dmUsers?: Set<string>;
+  adminUsers: Set<string> = new Set();
   private slashCommandHandler?: (interaction: ChatInputCommandInteraction) => void;
   private guildCommandDefs?: ApplicationCommandDataResolvable[];
 
@@ -474,6 +477,11 @@ export class DiscordAdapter {
     }
     if (config.dmUsers?.length) {
       this.dmUsers = new Set(config.dmUsers);
+    }
+    if (config.adminUsers?.length) {
+      for (const adminUserId of config.adminUsers) {
+        this.adminUsers.add(adminUserId);
+      }
     }
 
     this.client = new Client({
@@ -670,25 +678,6 @@ export class DiscordAdapter {
 
   // ── Operations ──
 
-  /** Split text into Discord-safe chunks (<=1900 chars), preferring newline then
-   *  space boundaries; hard-splits over-long runs. Discord rejects content over
-   *  the per-message limit (DiscordAPIError 50035). */
-  private splitForDiscord(text: string, limit = 1900): string[] {
-    if (!text) return [];
-    if (text.length <= limit) return [text];
-    const chunks: string[] = [];
-    let rest = text;
-    while (rest.length > limit) {
-      let cut = rest.lastIndexOf('\n', limit);
-      if (cut < limit * 0.5) cut = rest.lastIndexOf(' ', limit);
-      if (cut < limit * 0.5) cut = limit;
-      chunks.push(rest.slice(0, cut));
-      rest = rest.slice(cut).replace(/^\s+/, '');
-    }
-    if (rest) chunks.push(rest);
-    return chunks;
-  }
-
   async sendMessage(
     channelId: string,
     content: string,
@@ -700,7 +689,7 @@ export class DiscordAdapter {
     }
     const resolved = await this.resolveOutgoingMentions(channel, content);
     const attachments = buildAttachments(options?.files);
-    const chunks = this.splitForDiscord(resolved);
+    const chunks = splitForDiscord(resolved);
     // Files-only message (no text): still send one message carrying the files.
     if (chunks.length === 0 && attachments.length > 0) chunks.push('');
     let lastId = '';
@@ -789,7 +778,7 @@ export class DiscordAdapter {
     const dm = await user.createDM();
     const resolved = await this.resolveOutgoingMentions(dm, content);
     const attachments = buildAttachments(options?.files);
-    const chunks = this.splitForDiscord(resolved);
+    const chunks = splitForDiscord(resolved);
     if (chunks.length === 0 && attachments.length > 0) chunks.push('');
     let lastId = '';
     for (let i = 0; i < chunks.length; i++) {
